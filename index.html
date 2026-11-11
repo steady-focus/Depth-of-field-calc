@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Depth of field calculator</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f4f3ee; color: #202b29; font: 16px/1.55 system-ui, sans-serif; }
+  main { max-width: 880px; margin: 7vh auto; padding: 28px; }
+  .eyebrow { text-transform: uppercase; letter-spacing: .16em; font-size: .75rem; font-weight: 700; color: #527065; }
+  h1 { font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.1; letter-spacing: -.045em; margin: 12px 0 18px; }
+  .intro, .note { color: #56635f; }
+  .panel { background: #fff; border: 1px solid #dce1d9; border-radius: 18px; padding: 28px; margin-top: 28px; box-shadow: 0 8px 30px #20352a06; }
+  h2 { font-size: 1.1rem; margin: 0 0 20px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  label { display: block; font-weight: 650; margin-bottom: 7px; }
+  input[type=number] { width: 100%; font: inherit; padding: 11px 13px; border: 1px solid #a8b5ae; border-radius: 8px; color: inherit; background: #fff; }
+  input:disabled { background: #f0f2ee; color: #66736b; }
+  input[aria-invalid=true] { border-color: #ad392d; }
+  :focus-visible { outline: 3px solid #337a61; outline-offset: 3px; }
+  small { display: block; color: #59675f; margin-top: 6px; font-size: .8rem; }
+  .check { font-weight: 400; margin: 10px 0 0; display: flex; gap: 9px; align-items: center; }
+  input[type=checkbox] { accent-color: #27644e; width: 17px; height: 17px; }
+  button { margin-top: 24px; background: #255e4b; color: #fff; padding: 12px 20px; border: 0; border-radius: 8px; font: inherit; font-weight: 650; cursor: pointer; }
+  button:hover { background: #194936; }
+  .results { background: #eaf0e9; box-shadow: none; }
+  dl { margin: 0; }
+  dt { color: #4c6055; font-size: .85rem; }
+  dd { font-variant-numeric: tabular-nums; margin: 4px 0 0; font-size: clamp(1.4rem, 4vw, 2rem); font-weight: 650; letter-spacing: -.025em; }
+  .note { font-size: .85rem; margin-bottom: 0; }
+  #error { color: #9b3025; margin: 16px 0 0; }
+  [hidden] { display: none !important; }
+  footer { font-size: .8rem; color: #5c6861; margin-top: 24px; }
+  @media (max-width: 560px) { main { margin: 24px auto; padding: 18px; } .panel { padding: 22px; } .grid { grid-template-columns: 1fr; gap: 20px; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Photography · Optical tools</div>
+  <h1>Depth of field</h1>
+  <p class="intro">Find the range of acceptable sharpness for your lens and focus distance.</p>
+  <form id="calculator" class="panel" novalidate>
+    <h2>Your setup</h2>
+    <div class="grid">
+      <div><label for="focal">Focal length (mm)</label><input id="focal" name="focal" type="number" min="0" step="any" value="50" required aria-describedby="focal-help"><small id="focal-help">Use the actual focal length, not its full-frame equivalent.</small></div>
+      <div><label for="aperture">Aperture (f-number)</label><input id="aperture" name="aperture" type="number" min="0" step="any" value="1.8" required aria-describedby="aperture-help"><small id="aperture-help">For f/1.8, enter 1.8.</small></div>
+      <div><label for="distance">Focus distance (m)</label><input id="distance" name="distance" type="number" min="0" step="any" value="3" required aria-describedby="distance-help"><small id="distance-help">Measured from the lens’s front principal plane.</small><label class="check" for="infinity"><input id="infinity" type="checkbox">Focused at infinity</label></div>
+      <div><label for="coc">Circle of confusion (mm)</label><input id="coc" name="coc" type="number" min="0" step="any" value="0.03" required aria-describedby="coc-help"><small id="coc-help">Acceptable blur diameter; 0.03 mm is a common starting point for full frame.</small></div>
+    </div>
+    <button type="submit">Calculate depth of field</button>
+    <p id="error" role="alert" hidden></p>
+  </form>
+  <section class="panel results" aria-labelledby="results-title" aria-live="polite" aria-atomic="true">
+    <h2 id="results-title">Your focus range</h2>
+    <dl class="grid">
+      <div><dt>Near limit</dt><dd id="near">—</dd></div>
+      <div><dt>Far limit</dt><dd id="far">—</dd></div>
+      <div><dt>Total depth of field</dt><dd id="total">—</dd></div>
+      <div><dt>Hyperfocal distance</dt><dd id="hyperfocal">—</dd></div>
+    </dl>
+    <p id="status" class="note"></p>
+  </section>
+  <footer>Ideal thin-lens estimates. Perceived sharpness also depends on viewing size and distance. Lens design, diffraction and close-up effects can change practical results.</footer>
+  <noscript><p>This calculator needs JavaScript enabled. All calculations run locally in your browser.</p></noscript>
+</main>
+<script>
+'use strict';
+
+/**
+ * Ideal thin-lens depth of field; all distances in millimetres.
+ * f = focal length, N = f-number, c = acceptable blur diameter,
+ * s = object focus distance from the front principal plane.
+ *
+ * Let A = f² / (N c). Hyperfocal H = A + f.
+ * The exact finite-conjugate thin-lens expressions are:
+ *   near = s A / (A + s - f)
+ *   far  = s A / (A - s + f), for s < H; otherwise infinity.
+ * Using A = H - f consistently makes the far limit infinite at s = H.
+ * Replacing A with H in these expressions is a common approximation.
+ *
+ * At infinite focus, take the analytic limit: near = A, far = infinity.
+ * Do not substitute Infinity into the finite formula (Infinity/Infinity
+ * would produce NaN). Total DOF is infinite whenever the far limit is.
+ */
+function depthOfField(f, N, c, s) {
+  if (![f, N, c].every(v => Number.isFinite(v) && v > 0) ||
+      !(s === Infinity || (Number.isFinite(s) && s > f))) {
+    throw new RangeError('Use positive finite lens values and a focus distance greater than the focal length.');
+  }
+  const A = (f / N) * (f / c);
+  const H = A + f;
+  if (!Number.isFinite(A) || A <= 0 || !Number.isFinite(H) || H <= f) {
+    throw new RangeError('These values exceed the calculator’s numerical precision.');
+  }
+  // Ratio forms avoid multiplying two potentially large distances.
+  const near = s === Infinity ? A : A / (A / s + 1 - f / s);
+  const far = s >= H ? Infinity : s / ((H - s) / A);
+  const total = far === Infinity ? Infinity : far - near;
+  if (!Number.isFinite(near) || near <= 0 ||
+      (s < H && !Number.isFinite(far)) || total <= 0 || Number.isNaN(total)) {
+    throw new RangeError('These values exceed the calculator’s numerical precision.');
+  }
+  return { near, far, total, hyperfocal: H };
+}
+
+const form = document.getElementById('calculator');
+const fields = ['focal', 'aperture', 'distance', 'coc'].map(id => document.getElementById(id));
+const infinity = document.getElementById('infinity');
+const error = document.getElementById('error');
+const resultIds = ['near', 'far', 'total', 'hyperfocal'];
+const status = document.getElementById('status');
+
+/** Format finite distances to two decimal places in the most useful unit.
+ * Internal values stay in millimetres; rounding affects display only.
+ * Choose the unit before rounding: below 10 mm → mm, below 1000 mm → cm.
+ */
+function formatDistance(mm) {
+  if (mm === Infinity) return '∞ (infinity)';
+  const [value, unit] = mm < 10 ? [mm, 'mm']
+    : mm < 1000 ? [mm / 10, 'cm'] : [mm / 1000, 'm'];
+  return new Intl.NumberFormat('en', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(value) + ' ' + unit;
+}
+
+function calculate(moveFocus = false) {
+  error.hidden = true;
+  fields.forEach(field => field.removeAttribute('aria-invalid'));
+  let firstInvalid;
+  const messages = [];
+  fields.forEach(field => {
+    if (field.disabled) return;
+    if (!Number.isFinite(field.valueAsNumber) || field.valueAsNumber <= 0) {
+      field.setAttribute('aria-invalid', 'true');
+      firstInvalid ||= field;
+      messages.push(document.querySelector(`label[for="${field.id}"]`).textContent + ' must be a number greater than zero.');
+    }
+  });
+  const [f, N, distance, c] = fields.map(field => field.valueAsNumber);
+  const s = infinity.checked ? Infinity : distance * 1000;
+  if (!firstInvalid && !infinity.checked && (!Number.isFinite(s) || s <= f)) {
+    fields[2].setAttribute('aria-invalid', 'true');
+    firstInvalid = fields[2];
+    messages.push('Focus distance must be greater than the focal length (' + (f / 1000) + ' m) and within numerical range.');
+  }
+  try {
+    if (messages.length) throw new RangeError(messages.join(' '));
+    const results = depthOfField(f, N, c, s);
+    resultIds.forEach(id => document.getElementById(id).textContent = formatDistance(results[id]));
+    status.textContent = results.far === Infinity
+      ? 'Acceptable sharpness extends from the near limit to infinity.'
+      : 'Distances are measured from the lens; total depth of field is the far limit minus the near limit.';
+  } catch (problem) {
+    resultIds.forEach(id => document.getElementById(id).textContent = '—');
+    status.textContent = 'Enter valid values to calculate your focus range.';
+    error.textContent = problem.message;
+    error.hidden = false;
+    if (moveFocus && firstInvalid) firstInvalid.focus();
+  }
+}
+
+form.addEventListener('submit', event => { event.preventDefault(); calculate(true); });
+// Clear old results immediately when inputs change so they never describe a previous setup.
+form.addEventListener('input', () => {
+  fields[2].disabled = infinity.checked;
+  calculate();
+});
+calculate();
+</script>
+</body>
+</html>
